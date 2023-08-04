@@ -1,0 +1,78 @@
+import java.io.Serializable
+{%- set app_json = 'application/json' -%}
+{%- set reference = '$ref' -%}
+{% macro print_requirement(is_required) %}{% if is_required %}- NON-NULL{% else %}- NULLABLE{% endif %}{% endmacro %}
+{% macro print_collection_type(dictionary) %}{{ dictionary[reference].split('/')[-1] if dictionary[reference] else dictionary.type|capitalize }}{% endmacro %}
+{% macro print_schema_type(content) %} ({{ content[app_json].schema[reference].split('/')[-1] }}){% endmacro %}
+{% macro print_optional(property_name, required_elements) %}{% if property_name in required_elements %}{% else %}?{% endif %}{% endmacro %}
+{% macro print_enum_description(enum) %}{% if enum %}
+    // Possible values: {{ enum|join(", ")}}
+{%- endif %}{% endmacro %}
+
+{%- macro capitalize_first_letter(value) -%}
+    {% set first_letter = value[0:1] | upper -%}
+    {{ first_letter ~ value[1:] }}
+{%- endmacro -%}
+
+{%- macro create_enum(name, enum) -%}
+{%- if enum -%}
+    {% raw %}{% endraw %}
+    enum class {{ capitalize_first_letter(name) }} {
+        {% for value in enum -%}{{ value }}, {% endfor %}
+    }
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro print_property_type(property_details, schema_properties) -%}
+{%- if property_details.type == 'object' -%}
+Map
+{%- set additionalProperties = property_details.get('additionalProperties') -%}
+{%- if additionalProperties %}<String, {{print_collection_type(additionalProperties)}}>{% endif -%}
+{%- else -%}
+{{ property_details.type|capitalize }}
+{%- set collection_items = property_details.get('items') -%}
+{%- if collection_items %}<{{print_collection_type(collection_items)}}>{% endif -%}
+{%- endif %}
+{%- if property_name in schema_properties.required %}{% else %}?{% endif -%}
+{%- endmacro -%}
+
+// Endpoints
+{% set paths = data.paths -%}
+{% if paths is mapping and paths|length > 0 -%}
+    {% for path, endpoint_data in paths.items() -%}
+    {% for method, path_data in endpoint_data.items() if method in ['get', 'post', 'put', 'patch', 'delete'] %}
+    /// {{ path_data.summary }}
+    /// {{ path }} ({{ method.upper() }})
+    /// - Parameters:
+    {% for parameter in path_data.parameters | default([]) -%}
+    ///  - {{ parameter.name }}: {{ parameter.description }} {% if parameter.schema -%}({{parameter.schema.type}}) {% endif -%}{{ print_requirement(parameter.required) }}
+    {% endfor -%}
+    {% set requestBody = path_data.requestBody -%}
+    {% if requestBody and requestBody.content and requestBody.content[app_json] -%}
+    ///  - requestBody: {{print_schema_type(requestBody.content)}}{{print_requirement(requestBody.required)}}
+    {% endif -%}
+    {% if path_data.responses -%}
+    /// - Responses:
+    {% for status_code in path_data.responses.keys() -%}
+    {% set response = path_data.responses[status_code] -%} 
+    ///  - {{ status_code }}: {{response.description}}{% if response.content and response.content[app_json] %}{{print_schema_type(response.content) }}{% endif %}
+    {% endfor -%}
+    {% endif -%}
+    {% endfor -%}
+    {% endfor %}
+{%- endif %}
+
+// Objects
+{% set schemas = data.components.schemas -%}
+{% if schemas is mapping and schemas|length > 0 -%}
+{% for schema_name, schema_properties in schemas.items() %}
+data class {{ schema_name }} (
+    {%- for property_name, property_details in schema_properties.properties.items() %}
+    // {{ property_details.description|capitalize }}{{print_enum_description(property_details.enum)}}
+    val {{ property_name }}: : {{print_property_type(property_details, schema_properties)}},
+    {{create_enum(property_name, property_details.enum)}}
+    {%- endfor %}
+) : Serializable
+{% endfor -%}
+{%- endif -%}
+
